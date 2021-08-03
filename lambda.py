@@ -1,35 +1,38 @@
 import json
 import urllib.parse
 import boto3
-import pandas as pd
-print('Loading function')
 
 s3 = boto3.client('s3')
 
 
-def is_anagram(s1, s2):
-    return sorted(s1.lower()) == sorted(s2.lower())
+def is_anagram(sting_1, string_2):
+    return sorted(sting_1.lower()) == sorted(string_2.lower())
 
 
 def lambda_handler(event, context):
 
-    # Get the object from the event and show its content type
+    # Geting the object from the event
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = urllib.parse.unquote_plus(
         event['Records'][0]['s3']['object']['key'], encoding='utf-8')
 
+    # Initializing the result array, where anagram outputs will be stored
     result = []
 
     try:
         response = s3.get_object(Bucket=bucket, Key=key)
-        df = pd.read_csv(io.BytesIO(response['Body'].read()))
 
-        for _, row in df.iterrows():
-            result.append((row["string1"], row["string2"],
-                          is_anagram(row["string1"], row["string2"])))
+        # Reading the anagram.csv file
+        content = response["Body"].read().decode('utf-8')
+
+        for elem in content.split('\r'):
+            strings = elem.split(';')
+            strings[0] = strings[0].replace('\n', '')
+            strings[1] = strings[1].replace('\n', '')
+            result.append(is_anagram(strings[0], strings[1]))
 
         return result
     except Exception as e:
         print(e)
-        print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))
+        print('Error getting object {} from bucket {}.'.format(key, bucket))
         raise e
