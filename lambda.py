@@ -1,12 +1,8 @@
 import json
 import urllib.parse
 import boto3
-
+from is_anagram import is_anagram
 s3 = boto3.client('s3')
-
-
-def is_anagram(string_1, string_2):
-    return sorted(string_1.lower()) == sorted(string_2.lower())
 
 
 def lambda_handler(event, context):
