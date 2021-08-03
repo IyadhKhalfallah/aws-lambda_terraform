@@ -5,8 +5,8 @@ import boto3
 s3 = boto3.client('s3')
 
 
-def is_anagram(sting_1, string_2):
-    return sorted(sting_1.lower()) == sorted(string_2.lower())
+def is_anagram(string_1, string_2):
+    return sorted(string_1.lower()) == sorted(string_2.lower())
 
 
 def lambda_handler(event, context):
