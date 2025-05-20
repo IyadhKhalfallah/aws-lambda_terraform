@@ -38,9 +38,28 @@ jobs:
             echo "All available jobs in this run:"
             echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
             
+            # Filter out auto-approve jobs and get other relevant jobs
+            echo "Filtering out auto-approve jobs..."
+            RELEVANT_JOBS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("auto-approve"; "i") | not) | .name')
+            echo "Relevant jobs (excluding auto-approve):"
+            echo "$RELEVANT_JOBS"
+            
+            # # Get the last/latest job name which is most likely the deploy job
+            # LATEST_JOB=$(echo "$RELEVANT_JOBS" | tail -1)
+            # echo "Latest job: $LATEST_JOB"
+            
+            # # Check if the latest job contains "deploy" (case insensitive)
+            # if [[ "${LATEST_JOB,,}" == *"deploy"* ]]; then
+            #   echo "Latest job is a deploy job: $LATEST_JOB"
+            #   DEPLOY_JOB="$LATEST_JOB"
+            # else
+            #   # Try to find any job with "deploy" in the name
+            #   DEPLOY_JOB=$(echo "$RELEVANT_JOBS" | grep -i "deploy" | head -1)
+            #   echo "Found deploy job: $DEPLOY_JOB"
+            # fi
+            
             # list pending deployments for this run
             JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
-            echo "JSON: $JSON"
             COUNT=$(echo "$JSON" | jq 'length')
 
             if [[ "$COUNT" -gt 0 ]]; then
@@ -69,18 +88,12 @@ jobs:
                   
                   # Search for places where both the job name and environment appear close to each other
                   # This is a simple heuristic and might need refinement
-                  if echo "$JOBS_JSON" | grep -A 10 -B 10 "$job_pattern" | grep -q "$env_pattern"; then
+                  if [[ "${LATEST_JOB,,}" == *"deploy"* ]]; then
                     SHOULD_SKIP=true
                     echo "Found environment $ENV_NAME near deploy job $job - will require manual approval"
                     break
                   fi
                 done
-                
-                # Special case for environments that contain "prod" or are used in production
-                if [[ "$ENV_NAME" == *"prod"* ]] || [[ "$ENV_NAME" == *"production"* ]]; then
-                  SHOULD_SKIP=true
-                  echo "Environment $ENV_NAME appears to be a production environment - will require manual approval"
-                fi
                 
                 if [[ "$SHOULD_SKIP" == "true" ]]; then
                   echo "::notice ::Skipping auto-approval for environment $ENV_NAME - manual approval required"
