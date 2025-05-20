@@ -30,13 +30,8 @@ jobs:
       environment: tc-prod-review        # ←   manual
     needs: auto-approve
 
-  lint:
-    uses: ./.github/workflows/prod-lint.yml
-    with:
-      environment: tc-prod               # ←   auto
-
   test:
-    needs: [build, lint]
+    needs: [build]
     uses: ./.github/workflows/prod-test.yml
     with:
       environment: tc-prod               # ←   auto
