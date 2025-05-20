@@ -31,57 +31,52 @@ jobs:
           echo "Watching run $RUN_ID for pending deployments…"
 
           while true; do
-            # First get all the job names from the run
+            # First get all the job names from the run to identify deployment jobs
             JOBS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs)
+            echo "Full jobs JSON:"
+            echo "$JOBS_JSON" | jq -r '.'
             
-            # Create a list of deployment job names to skip auto-approval
-            echo "Finding deployment jobs..."
-            DEPLOY_JOBS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .name')
-            echo "Found deployment jobs:"
-            echo "$DEPLOY_JOBS"
+            # List all job names for reference
+            echo "All job names in this run:"
+            echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
             
             # list pending deployments for this run
-            JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
-            COUNT=$(echo "$JSON" | jq 'length')
+            DEPLOYMENTS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
+            COUNT=$(echo "$DEPLOYMENTS_JSON" | jq 'length')
 
             if [[ "$COUNT" -gt 0 ]]; then
               echo "::notice ::Found $COUNT pending deployment(s)"
               
               # Check each pending deployment
-              echo "$JSON" | jq -c '.[]' | while read -r deployment; do
+              echo "$DEPLOYMENTS_JSON" | jq -c '.[]' | while read -r deployment; do
                 ENV_NAME=$(echo "$deployment" | jq -r '.environment.name')
                 ENV_ID=$(echo "$deployment" | jq -r '.environment.id')
                 
                 echo "Pending approval for environment: $ENV_NAME (ID: $ENV_ID)"
                 
-                # Print the full JSON structure for debugging
-                echo "Deployment JSON structure:"
+                # Print the full deployment JSON for debugging
+                echo "Deployment JSON for $ENV_NAME:"
                 echo "$deployment" | jq '.'
                 
-                # Skip auto-approval for environments used in Deploy jobs
-                SHOULD_SKIP=false
+                # Now extract the workflow name for this environment from the jobs JSON
+                # Find jobs that might be related to this environment
+                RELATED_JOBS=$(echo "$JOBS_JSON" | jq -r ".jobs[] | select(.name | contains(\"$ENV_NAME\") or .html_url | contains(\"$ENV_NAME\")) | .name")
+                echo "Jobs related to environment $ENV_NAME:"
+                echo "$RELATED_JOBS"
                 
-                # Check if this environment is used in any of the deployment jobs
-                for JOB_NAME in $DEPLOY_JOBS; do
-                  if [[ "$JOBS_JSON" == *"\"$ENV_NAME\""* && "$JOBS_JSON" == *"\"$JOB_NAME\""* ]]; then
-                    SHOULD_SKIP=true
-                    echo "Environment $ENV_NAME is used in deploy job $JOB_NAME"
-                    break
-                  fi
-                done
-                
-                # Also skip any environment with prod/production in the name as a safety measure
-                if [[ "$ENV_NAME" == *"prod"* ]] || [[ "$ENV_NAME" == *"production"* ]]; then
-                  SHOULD_SKIP=true
-                  echo "Environment $ENV_NAME appears to be a production environment"
-                fi
-                
-                if [[ "$SHOULD_SKIP" == "true" ]]; then
-                  echo "::notice ::Skipping auto-approval for environment $ENV_NAME - manual approval required"
+                # Check if any related job has "Deploy" in its name
+                if echo "$RELATED_JOBS" | grep -i "Deploy" > /dev/null; then
+                  echo "::notice ::Environment $ENV_NAME is associated with a Deploy job - MANUAL approval required"
                   continue
                 fi
                 
-                # Auto-approve other environments
+                # If not found in related jobs, check if environment name itself contains "deploy"
+                if [[ "$ENV_NAME" == *"[Dd]eploy"* ]]; then
+                  echo "::notice ::Environment $ENV_NAME appears to be a deployment environment - MANUAL approval required"
+                  continue
+                fi
+                
+                # Auto-approve environments not related to deployment
                 echo "::notice ::Auto-approving environment: $ENV_NAME"
                 gh api -X POST \
                   repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
@@ -91,9 +86,9 @@ jobs:
               done
             fi
             
-            # Try corrected syntax for GitHub API jobs response
+            # Check if any deployment job is completed
             DEPLOY_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .conclusion')
-            echo "DEPLOY_JOB_STATUS: $DEPLOY_JOB_STATUS"
+            echo "Deploy job status: $DEPLOY_JOB_STATUS"
             
             if [[ "$DEPLOY_JOB_STATUS" == "success" ]]; then
               echo "::notice ::Deploy job completed successfully, stopping auto-approval loop"
