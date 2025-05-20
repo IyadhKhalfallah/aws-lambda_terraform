@@ -38,17 +38,9 @@ jobs:
             echo "All available jobs in this run:"
             echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
             
-            # Create a list of deployment job names to skip auto-approval - use array for better handling
-            echo "Finding deployment jobs..."
-            mapfile -t DEPLOY_JOBS < <(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .name')
-            
-            echo "Found deployment jobs (${#DEPLOY_JOBS[@]}):"
-            for job in "${DEPLOY_JOBS[@]}"; do
-              echo "  - $job"
-            done
-            
             # list pending deployments for this run
             JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
+            echo "JSON: $JSON"
             COUNT=$(echo "$JSON" | jq 'length')
 
             if [[ "$COUNT" -gt 0 ]]; then
