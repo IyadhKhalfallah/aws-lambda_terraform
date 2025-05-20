@@ -5,87 +5,97 @@ on:
   workflow_call:
     inputs:
       run_id:
+        type: string
         required: true
-        type: string
-      # Comma-separated list of job names to KEEP manual
+
+      # Comma-separated job names that must KEEP manual approval
       skip_job_names:
-        required: false
-        default: ""
         type: string
+        default: ""          # empty → auto-approve everything
+
     secrets:
-      GH_PAT:
-        required: true          # PAT of a user that is a required reviewer
+      GH_PAT:                # PAT of a user that is a required reviewer
+        required: true
 
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
+
     permissions:
-      deployments: write        # needed for POST /pending_deployments
-      contents: read
+      deployments: write     # required for POST /pending_deployments
+      contents:   read
+
     env:
-      GH_TOKEN: ${{ secrets.GH_PAT }}
-      RUN_ID:   ${{ inputs.run_id }}
-      SKIP_RAW: ${{ inputs.skip_job_names }}
+      GH_TOKEN:   ${{ secrets.GH_PAT }}
+      RUN_ID:     ${{ inputs.run_id }}
+      SKIP_RAW:   ${{ inputs.skip_job_names }}
 
     steps:
-      - name: Log in to gh
-        run: echo "$GH_TOKEN" | gh auth login --with-token
+    # ─────────────────────────────────────────────────────────────
+    - name: gh login
+      run: echo "$GH_TOKEN" | gh auth login --with-token
 
-      - name: Parse skip list
-        id: skip
-        run: |
-          # Turn "deploy, smoke test" →  deploy|smoke test  (grep-friendly regexp)
-          SKIP_REGEX=$(echo "$SKIP_RAW" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | paste -sd'|' -)
-          echo "regex=$SKIP_REGEX" >> "$GITHUB_OUTPUT"
+    # turn "deploy , smoke" →  deploy|smoke   (regex OR list)
+    - name: Build skip-regex
+      id: skip
+      run: |
+        REGEX=$(echo "$SKIP_RAW" |
+                tr ',' '\n' |
+                sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
+                paste -sd'|' -)
+        echo "SKIP_REGEX=$REGEX" >> $GITHUB_ENV
+        echo "regex=$REGEX"      >> $GITHUB_OUTPUT
 
-      - name: Watch & (selectively) approve
-        run: |
-          echo "Watching workflow run $RUN_ID …"
-          SKIP_RE='${{ steps.skip.outputs.regex }}'
+    # ─────────────────────────────────────────────────────────────
+    - name: Watch & selectively approve
+      run: |
+        echo "Watcher started for workflow-run $RUN_ID"
+        echo "Skip-regex: $SKIP_REGEX"
 
-          while true; do
-            # 1) list pending deployments for this run
-            PENDING=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
-            PENDING_COUNT=$(echo "$PENDING" | jq 'length')
+        while true; do
+          # 1 ▸ list pending deployments for this run
+          PENDING=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
+          PENDING_COUNT=$(echo "$PENDING" | jq 'length')
 
-            if (( PENDING_COUNT > 0 )); then
-              echo "::notice ::$PENDING_COUNT pending deployment(s) found"
+          # 2 ▸ fetch the run’s jobs once per loop (enough for <100 jobs)
+          JOBS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs?per_page=100)
 
-              # 2) get the jobs of this run (1 page is enough for typical pipelines)
-              JOBS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs?per_page=100)
+          if (( PENDING_COUNT > 0 )); then
+            echo "::notice ::$PENDING_COUNT pending deployment(s) found"
 
-              # 3) check each pending env → job name → skip or approve
-              echo "$PENDING" | jq -c '.[]' | while read -r DEP; do
-                ENV_ID=$(echo "$DEP" | jq '.environment.id')
+            echo "$PENDING" | jq -c '.[]' | while read -r DEP; do
+              ENV_ID=$(echo "$DEP" | jq '.environment_id')
 
-                JOB_NAME=$(echo "$JOBS" | \
-                  jq -r --argjson id "$ENV_ID" '.jobs[] | select(.environment.id==$id) | .name')
+              # map environment-ID ➜ job name
+              JOB_NAME=$(echo "$JOBS" |
+                         jq -r --argjson id "$ENV_ID" \
+                             '.jobs[] | select(.environment.id==$id) | .name')
 
-                if [[ -z "$JOB_NAME" ]]; then
-                  echo "⚠️  Could not map environment $ENV_ID to a job – skipping"
-                  continue
-                fi
+              if [[ -z "$JOB_NAME" ]]; then
+                echo "⚠️  Env $ENV_ID not linked to a job – skipping"
+                continue
+              fi
 
-                if [[ -n "$SKIP_RE" && "$JOB_NAME" =~ $SKIP_RE ]]; then
-                  echo "⏭️  Skipping manual-only job “$JOB_NAME”"
-                  continue
-                fi
+              if [[ -n "$SKIP_REGEX" && "$JOB_NAME" =~ $SKIP_REGEX ]]; then
+                echo "⏭️  Leaving “$JOB_NAME” for manual approval"
+                continue
+              fi
 
-                echo "✅  Auto-approving job “$JOB_NAME”"
-                gh api -X POST \
-                  repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
-                  -F environment_ids[]=$ENV_ID \
-                  -F state=approved \
-                  -F comment="Auto-approved by deploy-bot ✨"
-              done
-            fi
+              echo "✅  Auto-approving “$JOB_NAME”"
+              gh api -X POST \
+                repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
+                -F environment_ids[]=$ENV_ID \
+                -F state=approved \
+                -F comment="Auto-approved by deploy-bot ✨"
+            done
+          fi
 
-            # 4) exit when run is completed *and* nothing left pending
-            RUN_STATUS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID --jq .status)
-            if [[ "$RUN_STATUS" == "completed" && "$PENDING_COUNT" -eq 0 ]]; then
-              echo "Run finished and no pending deployments – exiting"
-              break
-            fi
+          # 3 ▸ exit when the run is finished AND nothing is left pending
+          RUN_STATUS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID --jq .status)
+          if [[ "$RUN_STATUS" == "completed" && "$PENDING_COUNT" -eq 0 ]]; then
+            echo "Run completed and no pending deployments – exiting"
+            break
+          fi
 
-            sleep 8
-          done
+          sleep 8
+        done
