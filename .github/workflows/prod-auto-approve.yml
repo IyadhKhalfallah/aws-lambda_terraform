@@ -51,7 +51,7 @@ jobs:
                 echo "$deployment" | jq '.'
                 
                 # Skip auto-approval for Deploy or Build jobs
-                if [[ "$CURRENT_STEP" == *"Deploy"* ]] || [[ "$CURRENT_STEP" == *"Build"* ]]; then
+                if [[ "$CURRENT_STEP" == *"Deploy"* ]]; then
                   echo "::notice ::Skipping auto-approval for critical job: $CURRENT_STEP in environment $ENV_NAME - manual approval required"
                   continue
                 fi
@@ -74,7 +74,7 @@ jobs:
             echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
             
             # Try corrected syntax for GitHub API jobs response
-            DEPLOY_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy|Build"; "i")) | .conclusion')
+            DEPLOY_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .conclusion')
             echo "DEPLOY_JOB_STATUS: $DEPLOY_JOB_STATUS"
             
             if [[ "$DEPLOY_JOB_STATUS" == "success" ]]; then
