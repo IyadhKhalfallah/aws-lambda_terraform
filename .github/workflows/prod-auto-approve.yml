@@ -44,19 +44,19 @@ jobs:
             echo "Relevant jobs (excluding auto-approve):"
             echo "$RELEVANT_JOBS"
             
-            # # Get the last/latest job name which is most likely the deploy job
-            # LATEST_JOB=$(echo "$RELEVANT_JOBS" | tail -1)
-            # echo "Latest job: $LATEST_JOB"
+            # Get the last/latest job name which is most likely the deploy job
+            LATEST_JOB=$(echo "$RELEVANT_JOBS" | tail -1)
+            echo "Latest job: $LATEST_JOB"
             
-            # # Check if the latest job contains "deploy" (case insensitive)
-            # if [[ "${LATEST_JOB,,}" == *"deploy"* ]]; then
-            #   echo "Latest job is a deploy job: $LATEST_JOB"
-            #   DEPLOY_JOB="$LATEST_JOB"
-            # else
-            #   # Try to find any job with "deploy" in the name
-            #   DEPLOY_JOB=$(echo "$RELEVANT_JOBS" | grep -i "deploy" | head -1)
-            #   echo "Found deploy job: $DEPLOY_JOB"
-            # fi
+            # Check if the latest job contains "deploy" (case insensitive)
+            if [[ "${LATEST_JOB,,}" == *"deploy"* ]]; then
+              echo "Latest job is a deploy job: $LATEST_JOB"
+              DEPLOY_JOB="$LATEST_JOB"
+            else
+              # Try to find any job with "deploy" in the name
+              DEPLOY_JOB=$(echo "$RELEVANT_JOBS" | grep -i "deploy" | head -1)
+              echo "Found deploy job: $DEPLOY_JOB"
+            fi
             
             # list pending deployments for this run
             JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
