@@ -1,0 +1,56 @@
+name: Auto-Approve (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        required: true
+        type: string
+    secrets:
+      GH_PAT:
+        required: true
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write        # needed for POST /pending_deployments
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      RUN_ID:   ${{ inputs.run_id }}
+
+    steps:
+      # authenticate the CLI
+      - name: Log in to gh
+        run: echo "$GH_TOKEN" | gh auth login --with-token
+
+      # main loop – keeps polling until the whole run is done
+      - name: Watch & approve
+        run: |
+          echo "Watching run $RUN_ID for pending deployments…"
+
+          while true; do
+            # list pending deployments for this run
+            JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
+            COUNT=$(echo "$JSON" | jq 'length')
+
+            if [[ "$COUNT" -gt 0 ]]; then
+              echo "::notice ::Found $COUNT pending deployment(s) – approving"
+
+              # build arg list: -F environment_ids[]=123 ...
+              ARGS=$(echo "$JSON" | jq -r '.[] .environment.id | "-F environment_ids[]=" + tostring' | xargs)
+
+              gh api -X POST \
+                repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
+                $ARGS \
+                -F state=approved \
+                -F comment="Auto-approved by deploy-bot ✨"
+            fi
+
+            # stop when the workflow run itself has completed
+            STATUS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID --jq .status)
+            [[ "$STATUS" == "completed" ]] && break
+
+            sleep 8
+          done
