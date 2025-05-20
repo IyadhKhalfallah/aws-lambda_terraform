@@ -25,7 +25,7 @@ jobs:
       - name: Log in to gh
         run: echo "$GH_TOKEN" | gh auth login --with-token
 
-      # main loop – keeps polling until the whole run is done
+      # main loop – keeps polling until the promote-latest-version step is completed
       - name: Watch & approve
         run: |
           echo "Watching run $RUN_ID for pending deployments…"
@@ -48,9 +48,24 @@ jobs:
                 -F comment="Auto-approved by deploy-bot ✨"
             fi
 
-            # stop when the workflow run itself has completed
+            # Check if the promote-latest-version job is completed
+            JOBS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs)
+            
+            # Check both job ID (name key in JSON) and display name (name field) 
+            # Use lowercase for case-insensitive comparison
+            PROMOTE_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select((.name | ascii_downcase | contains("Deploy")) or (.name | ascii_downcase | contains("Deploy (reusable)"))) | .conclusion')
+            
+            if [[ "$PROMOTE_JOB_STATUS" == "success" ]]; then
+              echo "::notice ::Promote latest version job completed successfully, stopping auto-approval loop"
+              break
+            fi
+            
+            # Also stop if the whole workflow run has completed (as a fallback)
             STATUS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID --jq .status)
-            [[ "$STATUS" == "completed" ]] && break
+            if [[ "$STATUS" == "completed" ]]; then
+              echo "::notice ::Workflow run completed, stopping auto-approval loop"
+              break
+            fi
 
             sleep 8
           done
