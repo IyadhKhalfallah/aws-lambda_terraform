@@ -48,15 +48,19 @@ jobs:
                 -F comment="Auto-approved by deploy-bot ✨"
             fi
 
-            # Check if the promote-latest-version job is completed
+            # Check if the Deploy job is completed
             JOBS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs)
             
-            # Check both job ID (name key in JSON) and display name (name field) 
-            # Use lowercase for case-insensitive comparison
-            PROMOTE_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select((.name | ascii_downcase | contains("Deploy")) or (.name | ascii_downcase | contains("Deploy (reusable)"))) | .conclusion')
-            echo "PROMOTE_JOB_STATUS: $PROMOTE_JOB_STATUS"
-            if [[ "$PROMOTE_JOB_STATUS" == "success" ]]; then
-              echo "::notice ::Promote latest version job completed successfully, stopping auto-approval loop"
+            # Debug: Show all job names to verify structure
+            echo "Available jobs:"
+            echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
+            
+            # Try corrected syntax for GitHub API jobs response
+            DEPLOY_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .conclusion')
+            echo "DEPLOY_JOB_STATUS: $DEPLOY_JOB_STATUS"
+            
+            if [[ "$DEPLOY_JOB_STATUS" == "success" ]]; then
+              echo "::notice ::Deploy job completed successfully, stopping auto-approval loop"
               break
             fi
             
@@ -67,5 +71,6 @@ jobs:
               break
             fi
 
+            echo "Waiting for 8 seconds before next check..."
             sleep 8
           done
