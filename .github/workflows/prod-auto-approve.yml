@@ -31,6 +31,15 @@ jobs:
           echo "Watching run $RUN_ID for pending deployments…"
 
           while true; do
+            # First get all the job names from the run
+            JOBS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs)
+            
+            # Create a list of deployment job names to skip auto-approval
+            echo "Finding deployment jobs..."
+            DEPLOY_JOBS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .name')
+            echo "Found deployment jobs:"
+            echo "$DEPLOY_JOBS"
+            
             # list pending deployments for this run
             JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
             COUNT=$(echo "$JSON" | jq 'length')
@@ -42,22 +51,38 @@ jobs:
               echo "$JSON" | jq -c '.[]' | while read -r deployment; do
                 ENV_NAME=$(echo "$deployment" | jq -r '.environment.name')
                 ENV_ID=$(echo "$deployment" | jq -r '.environment.id')
-                CURRENT_STEP=$(echo "$deployment" | jq -r '.current_environment_attempt.deployment_attempt.step')
                 
-                echo "Pending approval for environment: $ENV_NAME (ID: $ENV_ID) - Step: $CURRENT_STEP"
+                echo "Pending approval for environment: $ENV_NAME (ID: $ENV_ID)"
                 
                 # Print the full JSON structure for debugging
                 echo "Deployment JSON structure:"
                 echo "$deployment" | jq '.'
                 
-                # Skip auto-approval for Deploy or Build jobs
-                if [[ "$CURRENT_STEP" == *"Deploy"* ]]; then
-                  echo "::notice ::Skipping auto-approval for critical job: $CURRENT_STEP in environment $ENV_NAME - manual approval required"
+                # Skip auto-approval for environments used in Deploy jobs
+                SHOULD_SKIP=false
+                
+                # Check if this environment is used in any of the deployment jobs
+                for JOB_NAME in $DEPLOY_JOBS; do
+                  if [[ "$JOBS_JSON" == *"\"$ENV_NAME\""* && "$JOBS_JSON" == *"\"$JOB_NAME\""* ]]; then
+                    SHOULD_SKIP=true
+                    echo "Environment $ENV_NAME is used in deploy job $JOB_NAME"
+                    break
+                  fi
+                done
+                
+                # Also skip any environment with prod/production in the name as a safety measure
+                if [[ "$ENV_NAME" == *"prod"* ]] || [[ "$ENV_NAME" == *"production"* ]]; then
+                  SHOULD_SKIP=true
+                  echo "Environment $ENV_NAME appears to be a production environment"
+                fi
+                
+                if [[ "$SHOULD_SKIP" == "true" ]]; then
+                  echo "::notice ::Skipping auto-approval for environment $ENV_NAME - manual approval required"
                   continue
                 fi
                 
-                # Auto-approve other jobs
-                echo "::notice ::Auto-approving job: $CURRENT_STEP in environment $ENV_NAME"
+                # Auto-approve other environments
+                echo "::notice ::Auto-approving environment: $ENV_NAME"
                 gh api -X POST \
                   repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
                   -F environment_ids[]=$ENV_ID \
@@ -65,20 +90,13 @@ jobs:
                   -F comment="Auto-approved by deploy-bot ✨"
               done
             fi
-
-            # Check if the Deploy job is completed
-            JOBS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs)
-            
-            # Debug: Show all job names to verify structure
-            echo "Available jobs:"
-            echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
             
             # Try corrected syntax for GitHub API jobs response
             DEPLOY_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .conclusion')
             echo "DEPLOY_JOB_STATUS: $DEPLOY_JOB_STATUS"
             
             if [[ "$DEPLOY_JOB_STATUS" == "success" ]]; then
-              echo "::notice ::Critical job completed successfully, stopping auto-approval loop"
+              echo "::notice ::Deploy job completed successfully, stopping auto-approval loop"
               break
             fi
             
