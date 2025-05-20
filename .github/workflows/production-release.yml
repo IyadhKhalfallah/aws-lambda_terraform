@@ -1,0 +1,50 @@
+name: Production Release (test)
+
+on:
+  push:
+    branches: [ prod ]
+  workflow_dispatch:
+
+permissions:                                   # top-level defaults
+  contents: write
+  deployments: write
+  id-token: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  # 0) fire-and-forget auto-approver (no environment → starts immediately)
+  auto-approve:
+    uses: ./.github/workflows/prod-auto-approve.yml
+    with:
+      run_id: ${{ github.run_id }}
+    secrets:
+      GH_PAT: ${{ secrets.DEPLOY_BOT_PAT }}    # ✱ PAT of a required reviewer
+
+  # ──────────────────────────────────────────────────────────────
+  # 1) BUILD
+  build:
+    uses: ./.github/workflows/prod-build.yml
+    with:
+      environment: tc-prod                    # still protected
+    secrets: inherit                           # pass all repo/org secrets
+    # no explicit 'needs' → runs in parallel with auto-approve
+
+  # ──────────────────────────────────────────────────────────────
+  # 2) TEST  (needs build)
+  test:
+    needs: build
+    uses: ./.github/workflows/prod-test.yml
+    with:
+      environment: tc-prod
+    secrets: inherit
+
+  # ──────────────────────────────────────────────────────────────
+  # 3) DEPLOY  (needs test)
+  deploy:
+    needs: test
+    uses: ./.github/workflows/prod-deploy.yml
+    with:
+      environment: tc-prod
+    secrets: inherit
