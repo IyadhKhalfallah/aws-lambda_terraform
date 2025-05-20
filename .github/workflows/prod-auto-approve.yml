@@ -5,37 +5,31 @@ on:
   workflow_call:
     inputs:
       run_id:
-        type: string
         required: true
-
-      # Comma-separated job names that must KEEP manual approval
-      skip_job_names:
         type: string
-        default: ""          # empty → auto-approve everything
-
+      skip_job_names:                 # comma-separated list
+        required: false
+        default: ""
+        type: string
     secrets:
-      GH_PAT:                # PAT of a user that is a required reviewer
+      GH_PAT:                         # PAT of a required reviewer
         required: true
 
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
-
     permissions:
-      deployments: write     # required for POST /pending_deployments
+      deployments: write
       contents:   read
-
     env:
-      GH_TOKEN:   ${{ secrets.GH_PAT }}
-      RUN_ID:     ${{ inputs.run_id }}
-      SKIP_RAW:   ${{ inputs.skip_job_names }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      RUN_ID:   ${{ inputs.run_id }}
+      SKIP_RAW: ${{ inputs.skip_job_names }}
 
     steps:
-    # ─────────────────────────────────────────────────────────────
     - name: gh login
       run: echo "$GH_TOKEN" | gh auth login --with-token
 
-    # turn "deploy , smoke" →  deploy|smoke   (regex OR list)
     - name: Build skip-regex
       id: skip
       run: |
@@ -46,27 +40,25 @@ jobs:
         echo "SKIP_REGEX=$REGEX" >> $GITHUB_ENV
         echo "regex=$REGEX"      >> $GITHUB_OUTPUT
 
-    # ─────────────────────────────────────────────────────────────
     - name: Watch & selectively approve
       run: |
         echo "Watcher started for workflow-run $RUN_ID"
-        echo "Skip-regex: $SKIP_REGEX"
+        echo "Skip-regex: ${SKIP_REGEX:-<none>}"
 
         while true; do
-          # 1 ▸ list pending deployments for this run
+          # ── 1. list current pending deployments ──────────────────────
           PENDING=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
           PENDING_COUNT=$(echo "$PENDING" | jq 'length')
 
-          # 2 ▸ fetch the run’s jobs once per loop (enough for <100 jobs)
+          # ── 2. fetch job list (≤100 jobs) ────────────────────────────
           JOBS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs?per_page=100)
 
           if (( PENDING_COUNT > 0 )); then
             echo "::notice ::$PENDING_COUNT pending deployment(s) found"
 
             echo "$PENDING" | jq -c '.[]' | while read -r DEP; do
-              ENV_ID=$(echo "$DEP" | jq '.environment_id')
+              ENV_ID=$(echo "$DEP" | jq '.environment.id')
 
-              # map environment-ID ➜ job name
               JOB_NAME=$(echo "$JOBS" |
                          jq -r --argjson id "$ENV_ID" \
                              '.jobs[] | select(.environment.id==$id) | .name')
@@ -82,18 +74,22 @@ jobs:
               fi
 
               echo "✅  Auto-approving “$JOB_NAME”"
+              # safeguard: ignore 422 "no pending" errors
               gh api -X POST \
                 repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
                 -F environment_ids[]=$ENV_ID \
                 -F state=approved \
-                -F comment="Auto-approved by deploy-bot ✨"
+                -F comment="Auto-approved by deploy-bot ✨" || \
+                echo "::warning ::approval call for env $ENV_ID returned non-zero (probably already approved)"
             done
           fi
 
-          # 3 ▸ exit when the run is finished AND nothing is left pending
+          # ── 3. refresh pending count & decide whether to quit ─────────
+          NEW_PENDING_COUNT=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments | jq 'length')
           RUN_STATUS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID --jq .status)
-          if [[ "$RUN_STATUS" == "completed" && "$PENDING_COUNT" -eq 0 ]]; then
-            echo "Run completed and no pending deployments – exiting"
+
+          if [[ "$RUN_STATUS" == "completed" && "$NEW_PENDING_COUNT" -eq 0 ]]; then
+            echo "Run finished and no pending deployments – exiting"
             break
           fi
 
