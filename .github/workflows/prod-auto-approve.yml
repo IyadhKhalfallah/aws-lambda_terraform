@@ -34,11 +34,18 @@ jobs:
             # First get all the job names from the run
             JOBS_JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs)
             
-            # Create a list of deployment job names to skip auto-approval
+            # Debug: Show all available jobs
+            echo "All available jobs in this run:"
+            echo "$JOBS_JSON" | jq -r '.jobs[] | .name'
+            
+            # Create a list of deployment job names to skip auto-approval - use array for better handling
             echo "Finding deployment jobs..."
-            DEPLOY_JOBS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .name')
-            echo "Found deployment jobs:"
-            echo "$DEPLOY_JOBS"
+            mapfile -t DEPLOY_JOBS < <(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .name')
+            
+            echo "Found deployment jobs (${#DEPLOY_JOBS[@]}):"
+            for job in "${DEPLOY_JOBS[@]}"; do
+              echo "  - $job"
+            done
             
             # list pending deployments for this run
             JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
@@ -52,7 +59,7 @@ jobs:
                 ENV_NAME=$(echo "$deployment" | jq -r '.environment.name')
                 ENV_ID=$(echo "$deployment" | jq -r '.environment.id')
                 
-                echo "Pending approval for environment: $ENV_NAME (ID: $ENV_ID)"
+                echo "Processing pending approval for environment: $ENV_NAME (ID: $ENV_ID)"
                 
                 # Print the full JSON structure for debugging
                 echo "Deployment JSON structure:"
@@ -61,19 +68,26 @@ jobs:
                 # Skip auto-approval for environments used in Deploy jobs
                 SHOULD_SKIP=false
                 
-                # Check if this environment is used in any of the deployment jobs
-                for JOB_NAME in $DEPLOY_JOBS; do
-                  if [[ "$JOBS_JSON" == *"\"$ENV_NAME\""* && "$JOBS_JSON" == *"\"$JOB_NAME\""* ]]; then
+                # Check if this environment is mentioned in the same context as any deployment job
+                echo "Checking if environment is used in a deployment job..."
+                env_pattern="\"$ENV_NAME\""
+                
+                for job in "${DEPLOY_JOBS[@]}"; do
+                  job_pattern="\"$job\""
+                  
+                  # Search for places where both the job name and environment appear close to each other
+                  # This is a simple heuristic and might need refinement
+                  if echo "$JOBS_JSON" | grep -A 10 -B 10 "$job_pattern" | grep -q "$env_pattern"; then
                     SHOULD_SKIP=true
-                    echo "Environment $ENV_NAME is used in deploy job $JOB_NAME"
+                    echo "Found environment $ENV_NAME near deploy job $job - will require manual approval"
                     break
                   fi
                 done
                 
-                # Also skip any environment with prod/production in the name as a safety measure
+                # Special case for environments that contain "prod" or are used in production
                 if [[ "$ENV_NAME" == *"prod"* ]] || [[ "$ENV_NAME" == *"production"* ]]; then
                   SHOULD_SKIP=true
-                  echo "Environment $ENV_NAME appears to be a production environment"
+                  echo "Environment $ENV_NAME appears to be a production environment - will require manual approval"
                 fi
                 
                 if [[ "$SHOULD_SKIP" == "true" ]]; then
@@ -91,7 +105,7 @@ jobs:
               done
             fi
             
-            # Try corrected syntax for GitHub API jobs response
+            # Check if any deployment job is completed
             DEPLOY_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select(.name | test("Deploy"; "i")) | .conclusion')
             echo "DEPLOY_JOB_STATUS: $DEPLOY_JOB_STATUS"
             
