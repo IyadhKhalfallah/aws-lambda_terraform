@@ -83,17 +83,10 @@ jobs:
                 echo "Checking if environment is used in a deployment job..."
                 env_pattern="\"$ENV_NAME\""
                 
-                for job in "${DEPLOY_JOBS[@]}"; do
-                  job_pattern="\"$job\""
-                  
-                  # Search for places where both the job name and environment appear close to each other
-                  # This is a simple heuristic and might need refinement
-                  if [[ "${LATEST_JOB,,}" == *"deploy"* ]]; then
-                    SHOULD_SKIP=true
-                    echo "Found environment $ENV_NAME near deploy job $job - will require manual approval"
-                    break
-                  fi
-                done
+                if [[ "${LATEST_JOB,,}" == *"deploy"* ]]; then
+                  SHOULD_SKIP=true
+                  echo "Found environment $ENV_NAME near deploy job $job - will require manual approval"
+                fi
                 
                 if [[ "$SHOULD_SKIP" == "true" ]]; then
                   echo "::notice ::Skipping auto-approval for environment $ENV_NAME - manual approval required"
