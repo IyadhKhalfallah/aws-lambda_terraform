@@ -12,39 +12,38 @@ permissions:                                   # top-level defaults
   pull-requests: write
   issues: write
 
+# top-level orchestrator (excerpt)
+
 jobs:
-  # ──────────────────────────────────────────────────────────────
-  # 0) fire-and-forget auto-approver (no environment → starts immediately)
   auto-approve:
-    uses: ./.github/workflows/prod-auto-approve.yml
+    uses: ./.github/workflows/prod-auto-approve.yml   # see step 3
     with:
       run_id: ${{ github.run_id }}
+      auto_env: tc-prod                               # approve only this env
     secrets:
-      GH_PAT: ${{ secrets.DEPLOY_BOT_PAT }}    # ✱ PAT of a required reviewer
+      GH_PAT: ${{ secrets.DEPLOY_BOT_PAT }}
 
   # ──────────────────────────────────────────────────────────────
-  # 1) BUILD
   build:
     uses: ./.github/workflows/prod-build.yml
     with:
-      environment: tc-prod                    # still protected
-    secrets: inherit                           # pass all repo/org secrets
-    # no explicit 'needs' → runs in parallel with auto-approve
+      environment: tc-prod-review        # ←   manual
+    needs: auto-approve
 
-  # ──────────────────────────────────────────────────────────────
-  # 2) TEST  (needs build)
+  lint:
+    uses: ./.github/workflows/prod-lint.yml
+    with:
+      environment: tc-prod               # ←   auto
+
   test:
-    needs: build
+    needs: [build, lint]
     uses: ./.github/workflows/prod-test.yml
     with:
-      environment: tc-prod
-    secrets: inherit
+      environment: tc-prod               # ←   auto
 
-  # ──────────────────────────────────────────────────────────────
-  # 3) DEPLOY  (needs test)
   deploy:
     needs: test
     uses: ./.github/workflows/prod-deploy.yml
     with:
-      environment: tc-prod
-    secrets: inherit
+      environment: tc-prod        # ←   manual
+
