@@ -1,58 +1,56 @@
-# .github/workflows/prod-auto-approve.yml
 name: Auto-Approve (reusable)
 
 on:
   workflow_call:
     inputs:
       run_id:
-        type: string
         required: true
-      auto_env:            # environment name to auto-approve
         type: string
-        required: true
     secrets:
-      GH_PAT:              # PAT of a required reviewer
+      GH_PAT:
         required: true
 
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
     permissions:
-      deployments: write
-      contents:   read
+      deployments: write        # needed for POST /pending_deployments
+      contents: read
     env:
-      GH_TOKEN:  ${{ secrets.GH_PAT }}
-      RUN_ID:    ${{ inputs.run_id }}
-      AUTO_ENV:  ${{ inputs.auto_env }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      RUN_ID:   ${{ inputs.run_id }}
 
     steps:
-      - run: echo "$GH_TOKEN" | gh auth login --with-token
+      # authenticate the CLI
+      - name: Log in to gh
+        run: echo "$GH_TOKEN" | gh auth login --with-token
 
-      - name: Approve all pending deployments for $AUTO_ENV
+      # main loop – keeps polling until the whole run is done
+      - name: Watch & approve
         run: |
-          echo "Auto-approving environment: $AUTO_ENV"
+          echo "Watching run $RUN_ID for pending deployments…"
 
           while true; do
-            # list pending deployments for this workflow run
-            PENDING=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
-            IDS=$(echo "$PENDING" |
-                  jq -r --arg env "$AUTO_ENV" \
-                  '.[] | select(.environment.name==$env) | .environment.id')
+            # list pending deployments for this run
+            JSON=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments)
+            COUNT=$(echo "$JSON" | jq 'length')
 
-            for ID in $IDS; do
-              echo "✅  approving env-id $ID"
+            if [[ "$COUNT" -gt 0 ]]; then
+              echo "::notice ::Found $COUNT pending deployment(s) – approving"
+
+              # build arg list: -F environment_ids[]=123 ...
+              ARGS=$(echo "$JSON" | jq -r '.[] .environment.id | "-F environment_ids[]=" + tostring' | xargs)
+
               gh api -X POST \
                 repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments \
-                -F environment_ids[]=$ID \
+                $ARGS \
                 -F state=approved \
-                -F comment="Auto-approved by deploy-bot" || true
-            done
+                -F comment="Auto-approved by deploy-bot ✨"
+            fi
 
-            # exit when workflow finished AND no more pending tc-prod
-            LEFT=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/pending_deployments |
-                   jq -r --arg env "$AUTO_ENV" '[.[] | select(.environment.name==$env)] | length')
+            # stop when the workflow run itself has completed
             STATUS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID --jq .status)
+            [[ "$STATUS" == "completed" ]] && break
 
-            [[ $STATUS == "completed" && $LEFT -eq 0 ]] && break
             sleep 8
           done
