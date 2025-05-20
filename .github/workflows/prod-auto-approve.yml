@@ -54,7 +54,7 @@ jobs:
             # Check both job ID (name key in JSON) and display name (name field) 
             # Use lowercase for case-insensitive comparison
             PROMOTE_JOB_STATUS=$(echo "$JOBS_JSON" | jq -r '.jobs[] | select((.name | ascii_downcase | contains("Deploy")) or (.name | ascii_downcase | contains("Deploy (reusable)"))) | .conclusion')
-            
+            echo "PROMOTE_JOB_STATUS: $PROMOTE_JOB_STATUS"
             if [[ "$PROMOTE_JOB_STATUS" == "success" ]]; then
               echo "::notice ::Promote latest version job completed successfully, stopping auto-approval loop"
               break
